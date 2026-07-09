@@ -1,0 +1,7 @@
+Patient ID,Age,Gender,Disease,Medication,Dosage (MG)
+P001,28,Female,Flu,Paracetamol,500
+P002,45,Male,Hypertension,Amlodipine,5
+P003,60,Female,Diabetes,Metformin,500
+P004,34,Male,Asthma,Salbutamol,100
+P005,50,Female,Arthritis,Ibuprofen,400
+P006,29,Male,Flu,Paracetamol,500
