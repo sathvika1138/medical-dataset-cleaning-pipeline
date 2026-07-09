@@ -1,0 +1,42 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# 1. Load the cleaned data from Task 1 (Ensure path is correct)
+# If you haven't moved the CSV yet, use the current folder name
+df = pd.read_csv('cleaned_patient_data.csv')
+
+# 2. Setup Dashboard Layout (2x2 Grid)
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+fig.suptitle('Healthcare Data Visualization Dashboard', fontsize=18, fontweight='bold')
+
+# A. Patients by Age Group (Histogram)
+# Using bins to match the 0-18, 19-35, 36-50, 51-65, 65+ categories
+bins = [0, 18, 35, 50, 65, 120]
+labels = ['0-18', '19-35', '36-50', '51-65', '65+']
+df['AgeGroup'] = pd.cut(df['Age'], bins=bins, labels=labels)
+df['AgeGroup'].value_counts().sort_index().plot(kind='bar', ax=axes[0, 0], color='skyblue', edgecolor='black')
+axes[0, 0].set_title('Patients by Age Group')
+
+# B. Patients by Gender (Donut Chart)
+gender_counts = df['Gender'].value_counts()
+gender_counts.plot(kind='pie', ax=axes[0, 1], autopct='%1.1f%%', colors=['#ff9999','#66b3ff'], wedgeprops={'width': 0.4})
+axes[0, 1].set_title('Patients by Gender')
+axes[0, 1].set_ylabel('')
+
+# C. Patients by Disease (Horizontal Bar Chart)
+disease_counts = df['Disease'].value_counts()
+disease_counts.plot(kind='barh', ax=axes[1, 0], color='purple', alpha=0.7)
+axes[1, 0].set_title('Patients by Disease')
+
+# D. Medication Usage (Pie Chart)
+med_counts = df['Medication'].value_counts()
+med_counts.plot(kind='pie', ax=axes[1, 1], autopct='%1.1f%%', colors=['#99ff99','#ffcc99','#c2c2f0','#ffb3e6'])
+axes[1, 1].set_title('Medication Usage')
+axes[1, 1].set_ylabel('')
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+# 3. Save and display
+plt.savefig('Task_02_Data_Visualization/healthcare_dashboard.png')
+print("Task 2 Visualization complete: Dashboard saved.")
+plt.show()
