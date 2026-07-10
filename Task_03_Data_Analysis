@@ -1,0 +1,50 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# 1. Load Data
+# Expected columns: ['Date', 'Medicine_Name', 'Type', 'Units_Sold', 'Unit_Price', 'Cost_Price']
+df = pd.read_csv('pharmacy_sales.csv', parse_dates=['Date'])
+
+# 2. Data Engineering
+df['Revenue'] = df['Units_Sold'] * df['Unit_Price']
+df['COGS'] = df['Units_Sold'] * df['Cost_Price']
+df['Profit'] = df['Revenue'] - df['COGS']
+
+# 3. KPI Calculations
+# Top 10 Medicines by Revenue
+top_medicines = df.groupby('Medicine_Name')['Revenue'].sum().sort_values(ascending=False).head(10)
+
+# Monthly Sales Growth
+df['Month'] = df['Date'].dt.to_period('M')
+monthly_growth = df.groupby('Month')['Revenue'].sum().pct_change() * 100
+
+# Branded vs. Generic Analysis
+cat_performance = df.groupby('Type').agg({'Revenue': 'sum', 'Profit': 'sum'})
+cat_performance['Margin_Percent'] = (cat_performance['Profit'] / cat_performance['Revenue']) * 100
+
+# 4. Inventory Risk Assessment (Identify high revenue items with low turnover)
+# Assuming a 'Stock_Level' column exists
+if 'Stock_Level' in df.columns:
+    inventory_risk = df.groupby('Medicine_Name').agg({'Revenue': 'sum', 'Stock_Level': 'mean'})
+    inventory_risk = inventory_risk[inventory_risk['Stock_Level'] < 50] # Threshold logic
+
+# 5. Visualizations
+plt.figure(figsize=(14, 6))
+
+# Plot 1: Revenue by Type
+plt.subplot(1, 2, 1)
+cat_performance['Revenue'].plot(kind='pie', autopct='%1.1f%%', title='Revenue Share: Brand vs Generic')
+
+# Plot 2: Monthly Revenue Trend
+plt.subplot(1, 2, 2)
+df.groupby('Month')['Revenue'].sum().plot(kind='line', marker='o', title='Total Monthly Revenue Trend')
+
+plt.tight_layout()
+plt.show()
+
+# Output Results
+print("--- Performance Summary ---")
+print(cat_performance)
+print("\n--- Top 10 Medicines ---")
+print(top_medicines)
