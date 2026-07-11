@@ -1,0 +1,763 @@
+"""
+Task_05_Healthcare_Predictive_Analytics
+Comprehensive Predictive Analytics for Hospital Readmission Prediction
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
+                            roc_auc_score, roc_curve, confusion_matrix, classification_report)
+from sklearn.feature_selection import SelectKBest, chi2, mutual_info_classif
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set visualization style
+plt.style.use('seaborn-v0_8-darkgrid')
+sns.set_palette("husl")
+
+class HealthcarePredictiveAnalytics:
+    """
+    Healthcare Predictive Analytics System
+    Task 5: Predict hospital readmission risk
+    """
+    
+    def __init__(self):
+        self.model = None
+        self.scaler = StandardScaler()
+        self.feature_importance = None
+        self.model_performance = {}
+        self.best_model = None
+        self.pipeline = None
+        
+    def generate_readmission_data(self, n_patients=2000):
+        """
+        Generate synthetic healthcare data for readmission prediction
+        """
+        np.random.seed(42)
+        
+        # Define clinical conditions and their readmission risk
+        conditions = {
+            'Diabetes': {'base_risk': 0.25, 'symptoms': ['hyperglycemia', 'polyuria', 'fatigue']},
+            'Heart Failure': {'base_risk': 0.35, 'symptoms': ['dyspnea', 'edema', 'fatigue']},
+            'COPD': {'base_risk': 0.30, 'symptoms': ['cough', 'dyspnea', 'wheezing']},
+            'Pneumonia': {'base_risk': 0.20, 'symptoms': ['fever', 'cough', 'dyspnea']},
+            'Stroke': {'base_risk': 0.28, 'symptoms': ['weakness', 'speech_difficulty', 'numbness']},
+            'Sepsis': {'base_risk': 0.40, 'symptoms': ['fever', 'tachycardia', 'hypotension']}
+        }
+        
+        medications = ['Metformin', 'Lisinopril', 'Atorvastatin', 'Warfarin', 
+                      'Metoprolol', 'Aspirin', 'Ibuprofen', 'Omeprazole', 
+                      'Levothyroxine', 'Amoxicillin']
+        
+        data = []
+        
+        for patient_id in range(n_patients):
+            # Patient demographics
+            age = np.random.randint(18, 95)
+            gender = np.random.choice(['M', 'F'], p=[0.48, 0.52])
+            
+            # BMI with realistic distribution
+            bmi = np.random.normal(28, 6)
+            bmi = np.clip(bmi, 15, 50)
+            
+            # Primary condition
+            condition = np.random.choice(list(conditions.keys()))
+            base_risk = conditions[condition]['base_risk']
+            
+            # Comorbidities
+            num_comorbidities = np.random.poisson(1.2)
+            comorbidities = np.random.choice(
+                ['Diabetes', 'Hypertension', 'CHF', 'COPD', 'CKD', 'Anemia'],
+                size=min(num_comorbidities, 3),
+                replace=False
+            ).tolist()
+            
+            # Length of stay (days)
+            los = np.random.exponential(5) + 2
+            los = min(int(los), 30)
+            
+            # Number of medications
+            num_meds = np.random.randint(0, 6)
+            patient_meds = np.random.choice(medications, num_meds, replace=False).tolist()
+            
+            # Previous admissions in last 3 years
+            prev_admissions = np.random.poisson(0.8)
+            
+            # Lab values (simulated)
+            hemoglobin = np.random.normal(13, 2)
+            creatinine = np.random.normal(1.0, 0.3)
+            glucose = np.random.normal(120, 40)
+            blood_pressure = np.random.normal(130, 15)
+            
+            # Social determinants
+            insurance = np.random.choice(['Private', 'Medicare', 'Medicaid', 'Uninsured'], 
+                                        p=[0.4, 0.3, 0.2, 0.1])
+            income_quartile = np.random.randint(1, 5)
+            rural = np.random.choice([0, 1], p=[0.8, 0.2])
+            
+            # Calculate readmission risk factors
+            # Base risk from condition
+            risk_score = base_risk
+            
+            # Adjust for age
+            if age > 65:
+                risk_score += 0.1
+            if age > 80:
+                risk_score += 0.1
+            
+            # Comorbidity adjustment
+            risk_score += len(comorbidities) * 0.05
+            
+            # Length of stay (longer stay = higher readmission risk)
+            if los > 7:
+                risk_score += 0.08
+            if los > 14:
+                risk_score += 0.08
+            
+            # Medication count
+            risk_score += len(patient_meds) * 0.02
+            
+            # Previous admissions
+            risk_score += prev_admissions * 0.05
+            
+            # Lab anomalies
+            if hemoglobin < 10:
+                risk_score += 0.05
+            if creatinine > 1.5:
+                risk_score += 0.05
+            if glucose > 180:
+                risk_score += 0.05
+            if blood_pressure > 140:
+                risk_score += 0.03
+            
+            # Social factors
+            if insurance == 'Uninsured':
+                risk_score += 0.1
+            if income_quartile == 1:
+                risk_score += 0.05
+            if rural == 1:
+                risk_score += 0.03
+            
+            # Generate readmission outcome
+            readmission_prob = np.clip(risk_score, 0.05, 0.85)
+            readmitted = np.random.random() < readmission_prob
+            
+            # Time to readmission (if readmitted)
+            if readmitted:
+                days_to_readmit = np.random.exponential(30) + 1
+                days_to_readmit = min(int(days_to_readmit), 180)
+            else:
+                days_to_readmit = 0
+            
+            record = {
+                'patient_id': f'P{patient_id:04d}',
+                'age': age,
+                'gender': gender,
+                'bmi': round(bmi, 1),
+                'primary_condition': condition,
+                'comorbidities': ','.join(comorbidities),
+                'num_comorbidities': len(comorbidities),
+                'length_of_stay': los,
+                'medications': ','.join(patient_meds),
+                'num_medications': len(patient_meds),
+                'previous_admissions': prev_admissions,
+                'hemoglobin': round(hemoglobin, 1),
+                'creatinine': round(creatinine, 2),
+                'glucose': round(glucose, 0),
+                'blood_pressure': round(blood_pressure, 0),
+                'insurance': insurance,
+                'income_quartile': income_quartile,
+                'rural': rural,
+                'readmitted': readmitted,
+                'days_to_readmission': days_to_readmit,
+                'readmission_probability': readmission_prob,
+                'discharge_date': datetime.now() - timedelta(days=np.random.randint(1, 365))
+            }
+            data.append(record)
+        
+        df = pd.DataFrame(data)
+        
+        # Add derived features
+        df['age_group'] = pd.cut(df['age'], bins=[0, 40, 60, 80, 100], 
+                                labels=['<40', '40-60', '60-80', '>80'])
+        df['bmi_category'] = pd.cut(df['bmi'], bins=[0, 18.5, 25, 30, 50],
+                                   labels=['Underweight', 'Normal', 'Overweight', 'Obese'])
+        df['hypertension'] = df['blood_pressure'] > 140
+        df['anemia'] = df['hemoglobin'] < 11
+        df['renal_impairment'] = df['creatinine'] > 1.5
+        df['hyperglycemia'] = df['glucose'] > 150
+        
+        return df
+    
+    def load_real_data(self, filepath):
+        """
+        Load real healthcare data from CSV file
+        """
+        df = pd.read_csv(filepath)
+        return df
+    
+    def exploratory_analysis(self, df):
+        """
+        Perform comprehensive exploratory data analysis
+        """
+        print("=" * 80)
+        print("EXPLORATORY DATA ANALYSIS")
+        print("=" * 80)
+        
+        # Basic statistics
+        print("\n1. DATASET OVERVIEW")
+        print("-" * 40)
+        print(f"Total patients: {len(df)}")
+        print(f"Readmission rate: {df['readmitted'].mean():.2%}")
+        print(f"Average age: {df['age'].mean():.1f} years")
+        print(f"Average length of stay: {df['length_of_stay'].mean():.1f} days")
+        print(f"Average number of medications: {df['num_medications'].mean():.1f}")
+        
+        # Readmission by condition
+        print("\n2. READMISSION RATE BY CONDITION")
+        print("-" * 40)
+        condition_readmission = df.groupby('primary_condition')['readmitted'].agg(['count', 'mean'])
+        condition_readmission.columns = ['Count', 'Readmission Rate']
+        print(condition_readmission.sort_values('Readmission Rate', ascending=False).to_string())
+        
+        # Statistical tests
+        print("\n3. STATISTICAL ANALYSIS")
+        print("-" * 40)
+        
+        # Age analysis
+        readmit_age = df[df['readmitted']]['age'].mean()
+        non_readmit_age = df[~df['readmitted']]['age'].mean()
+        print(f"Average age - Readmitted: {readmit_age:.1f} vs Non-readmitted: {non_readmit_age:.1f}")
+        
+        # Length of stay analysis
+        readmit_los = df[df['readmitted']]['length_of_stay'].mean()
+        non_readmit_los = df[~df['readmitted']]['length_of_stay'].mean()
+        print(f"Average LOS - Readmitted: {readmit_los:.1f} days vs Non-readmitted: {non_readmit_los:.1f} days")
+        
+        # Correlations
+        print("\n4. FEATURE CORRELATIONS WITH READMISSION")
+        print("-" * 40)
+        numerical_features = ['age', 'bmi', 'length_of_stay', 'num_comorbidities', 
+                             'num_medications', 'previous_admissions', 'hemoglobin',
+                             'creatinine', 'glucose', 'blood_pressure']
+        
+        correlations = []
+        for feature in numerical_features:
+            corr = df[feature].corr(df['readmitted'].astype(int))
+            correlations.append((feature, corr))
+        
+        correlations.sort(key=lambda x: abs(x[1]), reverse=True)
+        for feature, corr in correlations[:5]:
+            print(f"  {feature}: {corr:.3f}")
+        
+        return condition_readmission
+    
+    def visualize_data(self, df):
+        """
+        Create comprehensive visualizations for EDA
+        """
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        
+        # 1. Readmission rate by condition
+        condition_rates = df.groupby('primary_condition')['readmitted'].mean().sort_values(ascending=False)
+        axes[0, 0].bar(condition_rates.index, condition_rates.values)
+        axes[0, 0].set_xlabel('Primary Condition')
+        axes[0, 0].set_ylabel('Readmission Rate')
+        axes[0, 0].set_title('Readmission Rate by Primary Condition')
+        axes[0, 0].tick_params(axis='x', rotation=45)
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # 2. Age distribution by readmission status
+        axes[0, 1].hist(df[df['readmitted']]['age'], alpha=0.7, label='Readmitted', bins=20)
+        axes[0, 1].hist(df[~df['readmitted']]['age'], alpha=0.7, label='Not Readmitted', bins=20)
+        axes[0, 1].set_xlabel('Age')
+        axes[0, 1].set_ylabel('Count')
+        axes[0, 1].set_title('Age Distribution by Readmission Status')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # 3. Length of stay boxplot
+        axes[0, 2].boxplot([df[~df['readmitted']]['length_of_stay'], 
+                           df[df['readmitted']]['length_of_stay']],
+                          labels=['Not Readmitted', 'Readmitted'])
+        axes[0, 2].set_ylabel('Length of Stay (days)')
+        axes[0, 2].set_title('Length of Stay by Readmission Status')
+        axes[0, 2].grid(True, alpha=0.3)
+        
+        # 4. Feature correlations heatmap
+        numerical_features = ['age', 'bmi', 'length_of_stay', 'num_comorbidities', 
+                             'num_medications', 'previous_admissions', 'hemoglobin',
+                             'creatinine', 'glucose', 'blood_pressure']
+        corr_matrix = df[numerical_features + ['readmitted']].corr()
+        sns.heatmap(corr_matrix[['readmitted']].sort_values('readmitted', ascending=False),
+                   annot=True, cmap='coolwarm', fmt='.2f', ax=axes[1, 0])
+        axes[1, 0].set_title('Feature Correlations with Readmission')
+        
+        # 5. Readmission by insurance type
+        insurance_rates = df.groupby('insurance')['readmitted'].mean()
+        axes[1, 1].bar(insurance_rates.index, insurance_rates.values)
+        axes[1, 1].set_xlabel('Insurance Type')
+        axes[1, 1].set_ylabel('Readmission Rate')
+        axes[1, 1].set_title('Readmission by Insurance Type')
+        axes[1, 1].tick_params(axis='x', rotation=45)
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        # 6. Readmission probability distribution
+        axes[1, 2].hist(df[df['readmitted']]['readmission_probability'], 
+                       alpha=0.7, label='Readmitted', bins=20)
+        axes[1, 2].hist(df[~df['readmitted']]['readmission_probability'], 
+                       alpha=0.7, label='Not Readmitted', bins=20)
+        axes[1, 2].set_xlabel('Readmission Probability')
+        axes[1, 2].set_ylabel('Count')
+        axes[1, 2].set_title('Risk Score Distribution')
+        axes[1, 2].legend()
+        axes[1, 2].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Additional visualizations
+        fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Comorbidity impact
+        comorbidity_rates = df.groupby('num_comorbidities')['readmitted'].mean()
+        axes2[0].plot(comorbidity_rates.index, comorbidity_rates.values, 
+                     marker='o', linewidth=2)
+        axes2[0].set_xlabel('Number of Comorbidities')
+        axes2[0].set_ylabel('Readmission Rate')
+        axes2[0].set_title('Impact of Comorbidities on Readmission')
+        axes2[0].grid(True, alpha=0.3)
+        
+        # Medication count impact
+        med_rates = df.groupby('num_medications')['readmitted'].mean()
+        axes2[1].bar(med_rates.index, med_rates.values)
+        axes2[1].set_xlabel('Number of Medications')
+        axes2[1].set_ylabel('Readmission Rate')
+        axes2[1].set_title('Impact of Medication Count on Readmission')
+        axes2[1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        return fig, fig2
+    
+    def prepare_features(self, df):
+        """
+        Prepare features for modeling with pipeline
+        """
+        # Define feature types
+        categorical_features = ['gender', 'primary_condition', 'insurance', 
+                               'age_group', 'bmi_category']
+        numerical_features = ['age', 'bmi', 'length_of_stay', 'num_comorbidities',
+                             'num_medications', 'previous_admissions', 'hemoglobin',
+                             'creatinine', 'glucose', 'blood_pressure']
+        binary_features = ['hypertension', 'anemia', 'renal_impairment', 'hyperglycemia', 'rural']
+        
+        # Create preprocessing pipeline
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', StandardScaler(), numerical_features),
+                ('cat', OneHotEncoder(drop='first', sparse_output=False), categorical_features),
+                ('binary', 'passthrough', binary_features)
+            ])
+        
+        # Prepare features
+        X = df[categorical_features + numerical_features + binary_features]
+        y = df['readmitted'].astype(int)
+        
+        # Store feature names
+        self.feature_names = categorical_features + numerical_features + binary_features
+        
+        return X, y, preprocessor
+    
+    def build_model_pipeline(self, preprocessor):
+        """
+        Build and train multiple models with cross-validation
+        """
+        # Define models
+        models = {
+            'Logistic Regression': LogisticRegression(
+                class_weight='balanced',
+                max_iter=1000,
+                random_state=42
+            ),
+            'Random Forest': RandomForestClassifier(
+                n_estimators=100,
+                max_depth=10,
+                min_samples_split=5,
+                class_weight='balanced',
+                random_state=42
+            ),
+            'Gradient Boosting': GradientBoostingClassifier(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=5,
+                random_state=42
+            )
+        }
+        
+        # Train and evaluate each model
+        results = {}
+        best_auc = 0
+        best_model_name = None
+        
+        X, y, _ = self.prepare_features(df)  # Need df from parent
+        # This will be fixed in main function
+        
+        return models, results
+    
+    def train_models(self, df):
+        """
+        Train and evaluate models
+        """
+        # Prepare features
+        X, y, preprocessor = self.prepare_features(df)
+        
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        
+        # Create pipeline
+        self.pipeline = Pipeline([
+            ('preprocessor', preprocessor),
+            ('classifier', LogisticRegression(
+                class_weight='balanced',
+                max_iter=1000,
+                random_state=42
+            ))
+        ])
+        
+        # Train model
+        self.pipeline.fit(X_train, y_train)
+        
+        # Make predictions
+        y_pred = self.pipeline.predict(X_test)
+        y_proba = self.pipeline.predict_proba(X_test)[:, 1]
+        
+        # Calculate metrics
+        metrics = {
+            'accuracy': accuracy_score(y_test, y_pred),
+            'precision': precision_score(y_test, y_pred),
+            'recall': recall_score(y_test, y_pred),
+            'f1': f1_score(y_test, y_pred),
+            'roc_auc': roc_auc_score(y_test, y_proba)
+        }
+        
+        print("\nModel Performance:")
+        for metric, value in metrics.items():
+            print(f"  {metric}: {value:.3f}")
+        
+        # Feature importance (for logistic regression, get coefficients)
+        if hasattr(self.pipeline.named_steps['classifier'], 'coef_'):
+            coefficients = self.pipeline.named_steps['classifier'].coef_[0]
+            
+            # Get feature names after preprocessing
+            feature_names = []
+            
+            # Numerical features
+            numerical_features = ['age', 'bmi', 'length_of_stay', 'num_comorbidities',
+                                 'num_medications', 'previous_admissions', 'hemoglobin',
+                                 'creatinine', 'glucose', 'blood_pressure']
+            feature_names.extend(numerical_features)
+            
+            # Categorical features
+            categorical_features = ['gender', 'primary_condition', 'insurance', 
+                                   'age_group', 'bmi_category']
+            for cat in categorical_features:
+                unique_vals = df[cat].unique()
+                for val in unique_vals[1:]:  # Skip first (reference)
+                    feature_names.append(f"{cat}_{val}")
+            
+            # Binary features
+            binary_features = ['hypertension', 'anemia', 'renal_impairment', 'hyperglycemia', 'rural']
+            feature_names.extend(binary_features)
+            
+            # Create feature importance DataFrame
+            self.feature_importance = pd.DataFrame({
+                'feature': feature_names[:len(coefficients)],
+                'importance': np.abs(coefficients)
+            }).sort_values('importance', ascending=False)
+        
+        # Cross-validation
+        cv_scores = cross_val_score(self.pipeline, X, y, cv=5, scoring='roc_auc')
+        print(f"\nCross-validation ROC-AUC: {cv_scores.mean():.3f} (+/- {cv_scores.std():.3f})")
+        
+        return self.pipeline, metrics, y_test, y_pred, y_proba
+    
+    def hyperparameter_tuning(self, X, y):
+        """
+        Perform hyperparameter tuning using GridSearchCV
+        """
+        param_grid = {
+            'classifier__C': [0.1, 1, 10],
+            'classifier__penalty': ['l2'],
+            'classifier__solver': ['lbfgs', 'liblinear']
+        }
+        
+        grid_search = GridSearchCV(
+            self.pipeline,
+            param_grid,
+            cv=5,
+            scoring='roc_auc',
+            n_jobs=-1,
+            verbose=1
+        )
+        
+        grid_search.fit(X, y)
+        
+        print(f"\nBest parameters: {grid_search.best_params_}")
+        print(f"Best CV score: {grid_search.best_score_:.3f}")
+        
+        self.pipeline = grid_search.best_estimator_
+        
+        return grid_search.best_params_
+    
+    def predict_readmission_risk(self, patient_data):
+        """
+        Predict readmission risk for new patients
+        """
+        # Ensure patient_data has all required features
+        X_new, _, _ = self.prepare_features(patient_data)
+        
+        # Make predictions
+        risk_scores = self.pipeline.predict_proba(X_new)[:, 1]
+        predictions = self.pipeline.predict(X_new)
+        
+        # Add predictions to dataframe
+        results = patient_data.copy()
+        results['readmission_risk'] = risk_scores
+        results['predicted_readmission'] = predictions
+        
+        # Risk categorization
+        results['risk_category'] = pd.cut(
+            risk_scores,
+            bins=[0, 0.3, 0.6, 1.0],
+            labels=['Low Risk', 'Medium Risk', 'High Risk']
+        )
+        
+        return results
+    
+    def visualize_predictions(self, y_test, y_pred, y_proba):
+        """
+        Visualize model predictions and performance
+        """
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        
+        # 1. Confusion Matrix
+        cm = confusion_matrix(y_test, y_pred)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0, 0])
+        axes[0, 0].set_xlabel('Predicted')
+        axes[0, 0].set_ylabel('Actual')
+        axes[0, 0].set_title('Confusion Matrix')
+        
+        # 2. ROC Curve
+        fpr, tpr, _ = roc_curve(y_test, y_proba)
+        auc = roc_auc_score(y_test, y_proba)
+        axes[0, 1].plot(fpr, tpr, label=f'AUC = {auc:.3f}', linewidth=2)
+        axes[0, 1].plot([0, 1], [0, 1], 'k--', label='Random')
+        axes[0, 1].set_xlabel('False Positive Rate')
+        axes[0, 1].set_ylabel('True Positive Rate')
+        axes[0, 1].set_title('ROC Curve')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # 3. Feature Importance
+        if self.feature_importance is not None:
+            top_features = self.feature_importance.head(10)
+            axes[0, 2].barh(top_features['feature'], top_features['importance'])
+            axes[0, 2].set_xlabel('Importance')
+            axes[0, 2].set_title('Top 10 Predictive Features')
+            axes[0, 2].grid(True, alpha=0.3)
+        
+        # 4. Prediction Distribution
+        axes[1, 0].hist(y_proba[y_test == 0], alpha=0.7, label='Not Readmitted', bins=20)
+        axes[1, 0].hist(y_proba[y_test == 1], alpha=0.7, label='Readmitted', bins=20)
+        axes[1, 0].set_xlabel('Predicted Probability')
+        axes[1, 0].set_ylabel('Frequency')
+        axes[1, 0].set_title('Prediction Distribution by Actual Class')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # 5. Precision-Recall Curve
+        from sklearn.metrics import precision_recall_curve
+        precision, recall, _ = precision_recall_curve(y_test, y_proba)
+        axes[1, 1].plot(recall, precision, linewidth=2)
+        axes[1, 1].set_xlabel('Recall')
+        axes[1, 1].set_ylabel('Precision')
+        axes[1, 1].set_title('Precision-Recall Curve')
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        # 6. Model Performance Metrics
+        metrics = ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'AUC-ROC']
+        values = [
+            accuracy_score(y_test, y_pred),
+            precision_score(y_test, y_pred),
+            recall_score(y_test, y_pred),
+            f1_score(y_test, y_pred),
+            roc_auc_score(y_test, y_proba)
+        ]
+        axes[1, 2].bar(metrics, values, color=['#2ecc71', '#3498db', '#e74c3c', '#f39c12', '#9b59b6'])
+        axes[1, 2].set_ylabel('Score')
+        axes[1, 2].set_title('Model Performance Metrics')
+        axes[1, 2].set_ylim([0, 1])
+        axes[1, 2].grid(True, alpha=0.3)
+        for i, v in enumerate(values):
+            axes[1, 2].text(i, v + 0.02, f'{v:.3f}', ha='center')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def generate_report(self, df, metrics, predictions):
+        """
+        Generate comprehensive analytics report
+        """
+        print("=" * 80)
+        print("HEALTHCARE PREDICTIVE ANALYTICS REPORT")
+        print("Hospital Readmission Risk Prediction")
+        print("=" * 80)
+        
+        print("\n1. DATA OVERVIEW")
+        print("-" * 40)
+        print(f"Total patients analyzed: {len(df)}")
+        print(f"Overall readmission rate: {df['readmitted'].mean():.2%}")
+        print(f"Features used: {len(self.feature_names)}")
+        
+        print("\n2. MODEL PERFORMANCE")
+        print("-" * 40)
+        for metric, value in metrics.items():
+            print(f"  {metric}: {value:.3f}")
+        
+        print("\n3. TOP PREDICTIVE FEATURES")
+        print("-" * 40)
+        if self.feature_importance is not None:
+            for _, row in self.feature_importance.head(5).iterrows():
+                print(f"  {row['feature']}: {row['importance']:.3f}")
+        
+        print("\n4. RISK DISTRIBUTION")
+        print("-" * 40)
+        risk_counts = predictions['risk_category'].value_counts()
+        for category, count in risk_counts.items():
+            percentage = count / len(predictions) * 100
+            print(f"  {category}: {count} patients ({percentage:.1f}%)")
+        
+        print("\n5. HIGH-RISK PATIENTS (>70% probability)")
+        print("-" * 40)
+        high_risk = predictions[predictions['readmission_risk'] > 0.7]
+        if not high_risk.empty:
+            for _, patient in high_risk.head(5).iterrows():
+                print(f"  {patient['patient_id']}: Age={patient['age']}, "
+                      f"Condition={patient['primary_condition']}, "
+                      f"Risk={patient['readmission_risk']:.2%}")
+        else:
+            print("  No patients with >70% readmission risk")
+        
+        print("\n6. RECOMMENDATIONS")
+        print("-" * 40)
+        
+        if high_risk.empty:
+            print("  ✓ Low overall readmission risk detected")
+        else:
+            print(f"  ⚠️  {len(high_risk)} patients identified as high risk")
+            print("  Actions recommended:")
+            print("    - Intensive follow-up care")
+            print("    - Care coordination with primary care")
+            print("    - Medication reconciliation")
+            print("    - Patient education and engagement")
+        
+        # Population health insights
+        print("\n7. POPULATION HEALTH INSIGHTS")
+        print("-" * 40)
+        
+        # By condition
+        condition_risk = predictions.groupby('primary_condition')['readmission_risk'].mean()
+        highest_risk_condition = condition_risk.idxmax()
+        highest_risk_value = condition_risk.max()
+        print(f"  Highest risk condition: {highest_risk_condition} ({highest_risk_value:.2%})")
+        
+        # By age group
+        age_risk = predictions.groupby('age_group')['readmission_risk'].mean()
+        highest_risk_age = age_risk.idxmax()
+        highest_risk_age_value = age_risk.max()
+        print(f"  Highest risk age group: {highest_risk_age} ({highest_risk_age_value:.2%})")
+        
+        # Interventions needed
+        print("\n8. RECOMMENDED INTERVENTIONS")
+        print("-" * 40)
+        if df['readmitted'].mean() > 0.2:
+            print("  - Implement enhanced discharge planning")
+            print("  - Develop post-discharge follow-up protocols")
+            print("  - Establish care transition programs")
+            print("  - Address social determinants of health")
+            print("  - Implement medication management programs")
+        
+        print("\n" + "=" * 80)
+
+def main():
+    """
+    Main execution for Task 5: Healthcare Predictive Analytics
+    """
+    print("TASK 5: HEALTHCARE PREDICTIVE ANALYTICS")
+    print("Hospital Readmission Prediction")
+    print("=" * 80)
+    
+    # Initialize system
+    analytics = HealthcarePredictiveAnalytics()
+    
+    # Generate data
+    print("\n1. GENERATING HEALTHCARE DATA...")
+    df = analytics.generate_readmission_data(n_patients=2000)
+    print(f"   Generated data for {len(df)} patients")
+    print(f"   Readmission rate: {df['readmitted'].mean():.2%}")
+    
+    # Exploratory analysis
+    print("\n2. PERFORMING EXPLORATORY ANALYSIS...")
+    condition_stats = analytics.exploratory_analysis(df)
+    
+    # Visualize data
+    print("\n3. GENERATING VISUALIZATIONS...")
+    analytics.visualize_data(df)
+    
+    # Train models
+    print("\n4. TRAINING PREDICTIVE MODELS...")
+    pipeline, metrics, y_test, y_pred, y_proba = analytics.train_models(df)
+    
+    # Hyperparameter tuning
+    print("\n5. OPTIMIZING HYPERPARAMETERS...")
+    X, y, _ = analytics.prepare_features(df)
+    best_params = analytics.hyperparameter_tuning(X, y)
+    
+    # Make predictions
+    print("\n6. PREDICTING READMISSION RISK...")
+    predictions = analytics.predict_readmission_risk(df)
+    
+    # Visualize predictions
+    print("\n7. VISUALIZING PREDICTIONS...")
+    analytics.visualize_predictions(y_test, y_pred, y_proba)
+    
+    # Generate report
+    print("\n8. GENERATING COMPREHENSIVE REPORT...")
+    analytics.generate_report(df, metrics, predictions)
+    
+    print("\n✅ Task 05 Complete: Healthcare Predictive Analytics")
+    print("   Hospital readmission prediction model built and evaluated")
+    print("   Risk assessment completed for all patients")
+    print("   Clinical recommendations generated")
+    
+    # Export results
+    predictions.to_csv('readmission_predictions.csv', index=False)
+    print("\n📊 Predictions exported to 'readmission_predictions.csv'")
+    
+    return analytics, predictions
+
+if __name__ == "__main__":
+    analytics, predictions = main()
