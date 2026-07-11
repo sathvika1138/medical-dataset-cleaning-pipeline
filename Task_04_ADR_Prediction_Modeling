@@ -1,0 +1,571 @@
+"""
+Task_04_ADR_Prediction_Modeling
+Advanced Adverse Drug Reaction Prediction and Risk Stratification System
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import (classification_report, confusion_matrix, roc_auc_score, 
+                            roc_curve, precision_recall_curve, f1_score, accuracy_score)
+from sklearn.feature_selection import SelectFromModel
+from imblearn.over_sampling import SMOTE
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set style
+plt.style.use('seaborn-v0_8-darkgrid')
+sns.set_palette("husl")
+
+class ADRPredictionModel:
+    """
+    Advanced ADR Prediction and Risk Stratification System
+    Task 4: Predictive modeling for ADR detection
+    """
+    
+    def __init__(self):
+        self.models = {}
+        self.best_model = None
+        self.scaler = StandardScaler()
+        self.feature_importance = None
+        self.model_performance = {}
+        self.risk_thresholds = {}
+        
+    def load_cleaned_data(self, filepath=None):
+        """
+        Load cleaned data from Task_02_Data_Cleaning
+        """
+        if filepath:
+            df = pd.read_csv(filepath)
+        else:
+            # Generate sample data if no file provided
+            df = self._generate_sample_data()
+        return df
+    
+    def _generate_sample_data(self, n_patients=1000):
+        """
+        Generate sample dataset with known ADR patterns
+        """
+        np.random.seed(42)
+        
+        # Define drug profiles with known ADR probabilities
+        drug_profiles = {
+            'Metformin': {'adr_rate': 0.15, 'common_adrs': ['nausea', 'diarrhea']},
+            'Lisinopril': {'adr_rate': 0.20, 'common_adrs': ['cough', 'dizziness']},
+            'Atorvastatin': {'adr_rate': 0.18, 'common_adrs': ['muscle_pain', 'joint_pain']},
+            'Amoxicillin': {'adr_rate': 0.25, 'common_adrs': ['rash', 'diarrhea']},
+            'Warfarin': {'adr_rate': 0.30, 'common_adrs': ['bleeding', 'bruising']},
+            'Metoprolol': {'adr_rate': 0.22, 'common_adrs': ['fatigue', 'dizziness']},
+            'Aspirin': {'adr_rate': 0.20, 'common_adrs': ['stomach_pain', 'heartburn']},
+            'Ibuprofen': {'adr_rate': 0.28, 'common_adrs': ['stomach_pain', 'nausea']}
+        }
+        
+        data = []
+        all_symptoms = ['nausea', 'headache', 'dizziness', 'fatigue', 'diarrhea', 
+                       'vomiting', 'abdominal_pain', 'rash', 'cough', 'muscle_pain',
+                       'joint_pain', 'bleeding', 'bruising', 'palpitations', 
+                       'anxiety', 'insomnia', 'tremor', 'heartburn', 'stomach_pain']
+        
+        for patient_id in range(n_patients):
+            # Patient demographics
+            age = np.random.randint(18, 90)
+            gender = np.random.choice(['M', 'F'])
+            bmi = np.random.normal(27, 5)
+            
+            # Comorbidities
+            num_comorbidities = np.random.poisson(1.5)
+            comorbidities = np.random.choice(
+                ['diabetes', 'hypertension', 'heart_disease', 'asthma', 
+                 'arthritis', 'depression', 'kidney_disease'],
+                size=num_comorbidities,
+                replace=False
+            ).tolist()
+            
+            # Number of medications (1-4)
+            num_drugs = np.random.randint(1, 5)
+            patient_drugs = np.random.choice(list(drug_profiles.keys()), num_drugs, replace=False)
+            
+            for drug in patient_drugs:
+                # Base ADR probability from drug profile
+                base_adr_prob = drug_profiles[drug]['adr_rate']
+                
+                # Adjust probability based on patient factors
+                age_factor = 1.0 if age < 65 else 1.5  # Elderly have higher risk
+                bmi_factor = 1.0 if 18.5 <= bmi <= 25 else 1.2
+                comorbidity_factor = 1.0 + (len(comorbidities) * 0.1)
+                drug_interaction_factor = 1.0 + ((num_drugs - 1) * 0.05)
+                
+                # Final ADR probability
+                adr_prob = min(base_adr_prob * age_factor * bmi_factor * 
+                              comorbidity_factor * drug_interaction_factor, 0.9)
+                
+                # Determine if ADR occurs
+                is_adr = np.random.random() < adr_prob
+                
+                # Generate symptoms
+                if is_adr:
+                    # ADR symptoms: include common ADRs for the drug
+                    common_adrs = drug_profiles[drug]['common_adrs']
+                    num_adr_symptoms = np.random.randint(1, min(len(common_adrs), 4))
+                    adr_symptoms = np.random.choice(common_adrs, num_adr_symptoms, replace=False).tolist()
+                    
+                    # Add some random symptoms
+                    extra_symptoms = np.random.choice(
+                        [s for s in all_symptoms if s not in adr_symptoms],
+                        size=np.random.randint(0, 3),
+                        replace=False
+                    ).tolist()
+                    
+                    symptoms = adr_symptoms + extra_symptoms
+                    severity = np.random.randint(1, 6)
+                else:
+                    # Non-ADR symptoms (random)
+                    symptoms = np.random.choice(all_symptoms, size=np.random.randint(0, 2), replace=False).tolist()
+                    severity = 0
+                
+                record = {
+                    'patient_id': f'P{patient_id:04d}',
+                    'drug': drug,
+                    'age': age,
+                    'gender': gender,
+                    'bmi': bmi,
+                    'comorbidities': ','.join(comorbidities),
+                    'num_comorbidities': len(comorbidities),
+                    'concurrent_medications': num_drugs - 1,
+                    'symptoms': ','.join(symptoms),
+                    'num_symptoms': len(symptoms),
+                    'is_adr': is_adr,
+                    'severity': severity,
+                    'adr_probability': adr_prob
+                }
+                data.append(record)
+        
+        return pd.DataFrame(data)
+    
+    def prepare_features(self, df):
+        """
+        Prepare features for modeling with advanced feature engineering
+        """
+        df_processed = df.copy()
+        
+        # Encode categorical variables
+        le_drug = LabelEncoder()
+        le_gender = LabelEncoder()
+        
+        df_processed['drug_encoded'] = le_drug.fit_transform(df_processed['drug'])
+        df_processed['gender_encoded'] = le_gender.fit_transform(df_processed['gender'])
+        
+        # Age groups
+        df_processed['age_group'] = pd.cut(df_processed['age'], 
+                                          bins=[0, 30, 50, 70, 100], 
+                                          labels=['18-30', '31-50', '51-70', '71+'])
+        age_group_encoded = LabelEncoder().fit_transform(df_processed['age_group'])
+        df_processed['age_group_encoded'] = age_group_encoded
+        
+        # BMI categories
+        df_processed['bmi_category'] = pd.cut(df_processed['bmi'],
+                                             bins=[0, 18.5, 25, 30, 100],
+                                             labels=['Underweight', 'Normal', 'Overweight', 'Obese'])
+        bmi_encoded = LabelEncoder().fit_transform(df_processed['bmi_category'])
+        df_processed['bmi_encoded'] = bmi_encoded
+        
+        # Feature engineering
+        df_processed['age_bmi_interaction'] = df_processed['age'] * df_processed['bmi']
+        df_processed['comorbidity_risk'] = df_processed['num_comorbidities'] * df_processed['age'] / 100
+        df_processed['drug_concurrent_ratio'] = df_processed['concurrent_medications'] / (df_processed['concurrent_medications'] + 1)
+        df_processed['symptom_severity_interaction'] = df_processed['num_symptoms'] * df_processed['severity']
+        
+        # Select features for modeling
+        feature_cols = ['drug_encoded', 'gender_encoded', 'age', 'bmi', 
+                       'num_comorbidities', 'concurrent_medications', 
+                       'num_symptoms', 'age_group_encoded', 'bmi_encoded',
+                       'age_bmi_interaction', 'comorbidity_risk', 
+                       'drug_concurrent_ratio', 'symptom_severity_interaction']
+        
+        X = df_processed[feature_cols]
+        y = df_processed['is_adr'].astype(int)
+        
+        # Store encoders for later use
+        self.encoders = {
+            'drug': le_drug,
+            'gender': le_gender
+        }
+        
+        self.feature_names = feature_cols
+        
+        return X, y
+    
+    def train_models(self, X, y, test_size=0.2, use_smote=True):
+        """
+        Train multiple models and select the best performing one
+        """
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=y
+        )
+        
+        # Scale features
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_test_scaled = self.scaler.transform(X_test)
+        
+        # Handle class imbalance using SMOTE
+        if use_smote:
+            smote = SMOTE(random_state=42)
+            X_train_resampled, y_train_resampled = smote.fit_resample(X_train_scaled, y_train)
+        else:
+            X_train_resampled, y_train_resampled = X_train_scaled, y_train
+        
+        # Define models to train
+        models = {
+            'Random Forest': RandomForestClassifier(
+                n_estimators=100, 
+                max_depth=10,
+                min_samples_split=5,
+                class_weight='balanced',
+                random_state=42
+            ),
+            'Gradient Boosting': GradientBoostingClassifier(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=5,
+                random_state=42
+            ),
+            'Logistic Regression': LogisticRegression(
+                class_weight='balanced',
+                max_iter=1000,
+                random_state=42
+            )
+        }
+        
+        # Train and evaluate each model
+        self.models = {}
+        self.model_performance = {}
+        
+        for name, model in models.items():
+            # Train
+            model.fit(X_train_resampled, y_train_resampled)
+            self.models[name] = model
+            
+            # Predictions
+            y_pred = model.predict(X_test_scaled)
+            y_proba = model.predict_proba(X_test_scaled)[:, 1]
+            
+            # Calculate metrics
+            performance = {
+                'accuracy': accuracy_score(y_test, y_pred),
+                'f1_score': f1_score(y_test, y_pred),
+                'roc_auc': roc_auc_score(y_test, y_proba),
+                'classification_report': classification_report(y_test, y_pred, output_dict=True)
+            }
+            
+            # Cross-validation
+            cv_scores = cross_val_score(model, X_train_resampled, y_train_resampled, cv=5)
+            performance['cv_mean'] = cv_scores.mean()
+            performance['cv_std'] = cv_scores.std()
+            
+            self.model_performance[name] = performance
+        
+        # Select best model (based on ROC-AUC)
+        best_model_name = max(self.model_performance, 
+                            key=lambda x: self.model_performance[x]['roc_auc'])
+        self.best_model = self.models[best_model_name]
+        self.best_model_name = best_model_name
+        
+        # Calculate feature importance
+        if hasattr(self.best_model, 'feature_importances_'):
+            self.feature_importance = pd.DataFrame({
+                'feature': self.feature_names,
+                'importance': self.best_model.feature_importances_
+            }).sort_values('importance', ascending=False)
+        else:
+            # For logistic regression, use coefficients
+            self.feature_importance = pd.DataFrame({
+                'feature': self.feature_names,
+                'importance': np.abs(self.best_model.coef_[0])
+            }).sort_values('importance', ascending=False)
+        
+        return X_test_scaled, y_test
+    
+    def optimize_hyperparameters(self, X, y):
+        """
+        Hyperparameter optimization using GridSearchCV
+        """
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        
+        # Define parameter grid
+        param_grid = {
+            'n_estimators': [50, 100, 200],
+            'max_depth': [5, 10, 15],
+            'min_samples_split': [2, 5, 10],
+            'class_weight': ['balanced', 'balanced_subsample']
+        }
+        
+        # Grid search
+        rf = RandomForestClassifier(random_state=42)
+        grid_search = GridSearchCV(
+            rf, param_grid, cv=5, 
+            scoring='roc_auc', 
+            n_jobs=-1,
+            verbose=1
+        )
+        grid_search.fit(X_train_scaled, y_train)
+        
+        print(f"Best parameters: {grid_search.best_params_}")
+        print(f"Best cross-validation score: {grid_search.best_score_:.4f}")
+        
+        # Update best model with optimized parameters
+        self.best_model = grid_search.best_estimator_
+        self.best_model_name = 'Optimized Random Forest'
+        
+        return grid_search.best_params_
+    
+    def predict_risk(self, patient_data):
+        """
+        Predict ADR risk for new patients
+        """
+        # Prepare features
+        X_new = self.prepare_features(patient_data)[0]
+        X_new_scaled = self.scaler.transform(X_new)
+        
+        # Make predictions
+        risk_probability = self.best_model.predict_proba(X_new_scaled)[:, 1]
+        risk_predictions = self.best_model.predict(X_new_scaled)
+        
+        # Risk stratification
+        risk_levels = pd.cut(risk_probability, 
+                            bins=[0, 0.3, 0.6, 1.0],
+                            labels=['Low Risk', 'Medium Risk', 'High Risk'])
+        
+        results = patient_data.copy()
+        results['adr_risk_probability'] = risk_probability
+        results['adr_prediction'] = risk_predictions
+        results['risk_level'] = risk_levels
+        
+        return results
+    
+    def calculate_risk_thresholds(self, X, y):
+        """
+        Calculate optimal risk thresholds for decision making
+        """
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_test_scaled = self.scaler.transform(X_test)
+        
+        # Get predictions
+        y_proba = self.best_model.predict_proba(X_test_scaled)[:, 1]
+        
+        # Calculate precision-recall curve
+        precision, recall, thresholds = precision_recall_curve(y_test, y_proba)
+        
+        # Find optimal threshold (maximize F1)
+        f1_scores = 2 * (precision * recall) / (precision + recall + 1e-10)
+        optimal_idx = np.argmax(f1_scores[:-1])  # Exclude last element
+        optimal_threshold = thresholds[optimal_idx]
+        
+        # Find thresholds for different risk levels
+        self.risk_thresholds = {
+            'low_risk': np.percentile(y_proba[y_test == 0], 75),
+            'medium_risk': optimal_threshold,
+            'high_risk': np.percentile(y_proba[y_test == 1], 25)
+        }
+        
+        return self.risk_thresholds
+    
+    def visualize_model_performance(self, X_test, y_test):
+        """
+        Create comprehensive model performance visualizations
+        """
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        
+        # 1. ROC Curves for all models
+        for name, model in self.models.items():
+            y_proba = model.predict_proba(X_test)[:, 1]
+            fpr, tpr, _ = roc_curve(y_test, y_proba)
+            auc = roc_auc_score(y_test, y_proba)
+            axes[0, 0].plot(fpr, tpr, label=f'{name} (AUC = {auc:.3f})')
+        
+        axes[0, 0].plot([0, 1], [0, 1], 'k--', label='Random')
+        axes[0, 0].set_xlabel('False Positive Rate')
+        axes[0, 0].set_ylabel('True Positive Rate')
+        axes[0, 0].set_title('ROC Curves - Model Comparison')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # 2. Confusion Matrix for best model
+        y_pred = self.best_model.predict(X_test)
+        cm = confusion_matrix(y_test, y_pred)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0, 1])
+        axes[0, 1].set_xlabel('Predicted')
+        axes[0, 1].set_ylabel('Actual')
+        axes[0, 1].set_title(f'Confusion Matrix - {self.best_model_name}')
+        
+        # 3. Feature Importance
+        axes[0, 2].barh(self.feature_importance['feature'][:10], 
+                       self.feature_importance['importance'][:10])
+        axes[0, 2].set_xlabel('Importance')
+        axes[0, 2].set_title('Top 10 Predictive Features')
+        axes[0, 2].grid(True, alpha=0.3)
+        
+        # 4. Model Performance Comparison
+        models = list(self.model_performance.keys())
+        metrics = ['accuracy', 'f1_score', 'roc_auc', 'cv_mean']
+        
+        x = np.arange(len(models))
+        width = 0.2
+        
+        for i, metric in enumerate(metrics):
+            values = [self.model_performance[m][metric] for m in models]
+            axes[1, 0].bar(x + i*width, values, width, label=metric.capitalize())
+        
+        axes[1, 0].set_xlabel('Model')
+        axes[1, 0].set_ylabel('Score')
+        axes[1, 0].set_title('Model Performance Comparison')
+        axes[1, 0].set_xticks(x + width*1.5)
+        axes[1, 0].set_xticklabels(models, rotation=15)
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # 5. Precision-Recall Curve
+        y_proba = self.best_model.predict_proba(X_test)[:, 1]
+        precision, recall, _ = precision_recall_curve(y_test, y_proba)
+        axes[1, 1].plot(recall, precision, linewidth=2)
+        axes[1, 1].set_xlabel('Recall')
+        axes[1, 1].set_ylabel('Precision')
+        axes[1, 1].set_title('Precision-Recall Curve')
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        # 6. Risk Probability Distribution
+        axes[1, 2].hist(y_proba[y_test == 0], alpha=0.7, label='Non-ADR', bins=20)
+        axes[1, 2].hist(y_proba[y_test == 1], alpha=0.7, label='ADR', bins=20)
+        axes[1, 2].axvline(x=self.risk_thresholds.get('medium_risk', 0.5), 
+                          color='red', linestyle='--', label='Optimal Threshold')
+        axes[1, 2].set_xlabel('Predicted Probability')
+        axes[1, 2].set_ylabel('Frequency')
+        axes[1, 2].set_title('Risk Probability Distribution')
+        axes[1, 2].legend()
+        axes[1, 2].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        return fig
+    
+    def generate_risk_report(self, risk_results):
+        """
+        Generate detailed risk assessment report
+        """
+        print("=" * 80)
+        print("ADR RISK PREDICTION REPORT")
+        print("=" * 80)
+        
+        print(f"\nBest Model: {self.best_model_name}")
+        print(f"Model Performance:")
+        print(f"  - ROC-AUC: {self.model_performance[self.best_model_name]['roc_auc']:.3f}")
+        print(f"  - F1 Score: {self.model_performance[self.best_model_name]['f1_score']:.3f}")
+        print(f"  - Accuracy: {self.model_performance[self.best_model_name]['accuracy']:.3f}")
+        
+        print("\nRisk Distribution:")
+        print(f"  - High Risk: {(risk_results['risk_level'] == 'High Risk').sum()}")
+        print(f"  - Medium Risk: {(risk_results['risk_level'] == 'Medium Risk').sum()}")
+        print(f"  - Low Risk: {(risk_results['risk_level'] == 'Low Risk').sum()}")
+        
+        print("\nTop 5 Risk Factors:")
+        for _, row in self.feature_importance.head(5).iterrows():
+            print(f"  - {row['feature']}: {row['importance']:.4f}")
+        
+        print("\nHigh-Risk Patients (>70% probability):")
+        high_risk_patients = risk_results[risk_results['adr_risk_probability'] > 0.7]
+        if not high_risk_patients.empty:
+            for _, patient in high_risk_patients.head(5).iterrows():
+                print(f"  - {patient['patient_id']}: Drug={patient['drug']}, "
+                      f"Risk={patient['adr_risk_probability']:.2%}, "
+                      f"Severity={patient['severity']}")
+        
+        print("\n" + "=" * 80)
+        
+        # Recommendations
+        print("\nRECOMMENDATIONS:")
+        print("-" * 40)
+        
+        high_risk_count = (risk_results['risk_level'] == 'High Risk').sum()
+        if high_risk_count > 0:
+            print(f"⚠️  {high_risk_count} patients identified as HIGH RISK for ADR")
+            print("   Actions needed:")
+            print("   - Immediate clinical review")
+            print("   - Consider alternative medications")
+            print("   - Enhanced monitoring protocol")
+        
+        if len(risk_results) > 100:
+            print(f"\n📊 Population-level insights:")
+            print("   - Consider medication review for high-risk demographic groups")
+            print("   - Implement clinical decision support alerts")
+            print("   - Monitor identified risk factors proactively")
+        
+        return risk_results
+
+def main():
+    """
+    Main execution for Task 4: ADR Prediction Modeling
+    """
+    print("TASK 4: ADR PREDICTION MODELING")
+    print("=" * 80)
+    
+    # Initialize model
+    model = ADRPredictionModel()
+    
+    # Load or generate data
+    print("\n1. LOADING DATA...")
+    df = model._generate_sample_data(n_patients=1000)
+    print(f"   Loaded {len(df)} records from {df['patient_id'].nunique()} patients")
+    
+    # Prepare features
+    print("\n2. PREPARING FEATURES...")
+    X, y = model.prepare_features(df)
+    print(f"   Features: {X.shape[1]}, Records: {X.shape[0]}")
+    
+    # Train models
+    print("\n3. TRAINING PREDICTIVE MODELS...")
+    X_test, y_test = model.train_models(X, y)
+    
+    # Optimize hyperparameters
+    print("\n4. OPTIMIZING HYPERPARAMETERS...")
+    best_params = model.optimize_hyperparameters(X, y)
+    
+    # Calculate risk thresholds
+    print("\n5. CALCULATING RISK THRESHOLDS...")
+    thresholds = model.calculate_risk_thresholds(X, y)
+    print(f"   Optimal threshold: {thresholds['medium_risk']:.3f}")
+    
+    # Predict risks
+    print("\n6. PREDICTING ADR RISKS...")
+    risk_results = model.predict_risk(df)
+    
+    # Visualize results
+    print("\n7. GENERATING VISUALIZATIONS...")
+    model.visualize_model_performance(X_test, y_test)
+    
+    # Generate report
+    print("\n8. GENERATING RISK REPORT...")
+    model.generate_risk_report(risk_results)
+    
+    print("\n✅ Task 04 Complete: ADR Prediction Modeling")
+    print("   Models trained and evaluated successfully")
+    print("   Risk assessment completed for all patients")
+    
+    return model, risk_results
+
+if __name__ == "__main__":
+    model, risk_results = main()
